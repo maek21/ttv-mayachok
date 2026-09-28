@@ -1,6 +1,6 @@
 [package]
 name = "mayachok"
-version = "0.2.1"
+version = "0.2.2"
 description = "Маячок — голосовой ввод для Windows"
 authors = ["Mark Baranov"]
 edition = "2021"

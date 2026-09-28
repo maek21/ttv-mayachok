@@ -118,6 +118,24 @@ pub mod local {
             .join(" ")
     }
 
+    struct AbortCtx {
+        abort: Arc<AtomicBool>,
+        deadline: Instant,
+        timed_out: AtomicBool,
+    }
+
+    unsafe extern "C" fn abort_cb(data: *mut std::ffi::c_void) -> bool {
+        if data.is_null() {
+            return false;
+        }
+        let c = &*(data as *const AbortCtx);
+        if Instant::now() > c.deadline {
+            c.timed_out.store(true, Ordering::SeqCst);
+            return true;
+        }
+        c.abort.load(Ordering::SeqCst)
+    }
+
     impl LocalEngine {
         pub fn new() -> Self {
             whisper_rs::install_logging_hooks();
@@ -237,20 +255,19 @@ pub mod local {
             if !prompt.is_empty() {
                 p.set_initial_prompt(&prompt);
             }
-            let deadline = Instant::now() + timeout;
-            let timed_out = Arc::new(AtomicBool::new(false));
-            let (abort2, timed_out2) = (abort.clone(), timed_out.clone());
-            p.set_abort_callback_safe(move || {
-                if Instant::now() > deadline {
-                    timed_out2.store(true, Ordering::SeqCst);
-                    return true;
-                }
-                abort2.load(Ordering::SeqCst)
-            });
+            // Свой колбэк прерывания вместо set_abort_callback_safe: в whisper-rs 0.14 тот
+            // читает замыкание не по тому указателю (Box<Box<dyn FnMut>> как F), колбэк
+            // возвращает мусор, энкодер «прерывается» и whisper_full отдаёт -6.
+            let actx = Box::new(AbortCtx { abort: abort.clone(), deadline: Instant::now() + timeout, timed_out: AtomicBool::new(false) });
+            // SAFETY: actx живёт до конца функции, то есть дольше вызова full()
+            unsafe {
+                p.set_abort_callback(Some(abort_cb));
+                p.set_abort_callback_user_data(&*actx as *const AbortCtx as *mut std::ffi::c_void);
+            }
 
             let t = Instant::now();
             let res = loaded.state.full(p, &audio);
-            if timed_out.load(Ordering::SeqCst) {
+            if actx.timed_out.load(Ordering::SeqCst) {
                 return Err("Слишком долго — возьми модель полегче или включи видеокарту".into());
             }
             if abort.load(Ordering::SeqCst) {
