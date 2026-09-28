@@ -25,6 +25,9 @@ pub fn build_prompt(s: &Settings) -> String {
     prompt
 }
 
+/// Начало сообщения об ошибке самого whisper.cpp — по нему движок решает, пробовать ли запасной режим
+pub const WHISPER_FAIL: &str = "Ошибка распознавания";
+
 /// Как прошло распознавание — для лога и диагностики
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,14 +61,15 @@ pub fn audio_ctx(samples: usize, quick: bool) -> i32 {
 pub mod local {
     use super::*;
     use parking_lot::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError, WhisperState};
 
     pub struct Loaded {
         pub model_id: String,
         gpu: bool,
+        flash: bool,
         _ctx: WhisperContext,
         state: WhisperState,
     }
@@ -77,6 +81,9 @@ pub mod local {
         /// Лёгкие копии для интерфейса: их можно читать, пока модель занята
         backend: Mutex<Backend>,
         loaded_id: Mutex<Option<String>>,
+        /// Запасные режимы, если whisper.cpp падает на быстрых настройках:
+        /// 0 — flash attention + урезанный audio_ctx; 1 — полное окно 30 с; 2 — процессор без flash attention
+        safe: AtomicU8,
     }
 
     pub const GPU_BUILD: bool = cfg!(any(feature = "cuda", feature = "vulkan"));
@@ -116,7 +123,22 @@ pub mod local {
             whisper_rs::install_logging_hooks();
             let backend = Backend { device: "Процессор".into(), gpu: false, cpu_features: cpu_features(), threads: threads() };
             log::info!("whisper.cpp: {}", whisper_rs::print_system_info());
-            Self { inner: Mutex::new(None), backend: Mutex::new(backend), loaded_id: Mutex::new(None) }
+            Self { inner: Mutex::new(None), backend: Mutex::new(backend), loaded_id: Mutex::new(None), safe: AtomicU8::new(0) }
+        }
+
+        /// Перейти на более надёжный (и медленный) режим. `false` — дальше некуда.
+        pub fn escalate(&self) -> bool {
+            let cur = self.safe.load(Ordering::SeqCst);
+            if cur >= 2 {
+                return false;
+            }
+            self.safe.store(cur + 1, Ordering::SeqCst);
+            log::warn!(
+                "whisper: перехожу на запасной режим {} ({})",
+                cur + 1,
+                if cur + 1 == 1 { "полное окно 30 с" } else { "процессор без flash attention" }
+            );
+            true
         }
 
         pub fn loaded_model(&self) -> Option<String> {
@@ -135,8 +157,10 @@ pub mod local {
 
         pub fn ensure_loaded(&self, model_id: &str, path: &Path, want_gpu: bool) -> Result<(), String> {
             let mut guard = self.inner.lock();
-            let gpu = want_gpu && GPU_BUILD && !gpu_devices().is_empty();
-            if guard.as_ref().map(|l| l.model_id == model_id && l.gpu == gpu).unwrap_or(false) {
+            let safe = self.safe.load(Ordering::SeqCst);
+            let gpu = want_gpu && GPU_BUILD && safe < 2 && !gpu_devices().is_empty();
+            let flash = safe < 2;
+            if guard.as_ref().map(|l| l.model_id == model_id && l.gpu == gpu && l.flash == flash).unwrap_or(false) {
                 return Ok(());
             }
             *guard = None;
@@ -146,8 +170,8 @@ pub mod local {
             }
             let mut params = WhisperContextParameters::default();
             params.use_gpu(gpu);
-            // Flash attention ускоряет и видеокарту, и процессор
-            params.flash_attn(true);
+            // Flash attention ускоряет и видеокарту, и процессор (кроме запасного режима)
+            params.flash_attn(flash);
             let t = Instant::now();
             let ctx = WhisperContext::new_with_params(&path.to_string_lossy(), params)
                 .map_err(|e| format!("Не удалось загрузить модель: {e}"))?;
@@ -163,7 +187,7 @@ pub mod local {
                 b.device = device;
                 b.gpu = gpu;
             }
-            *guard = Some(Loaded { model_id: model_id.into(), gpu, _ctx: ctx, state });
+            *guard = Some(Loaded { model_id: model_id.into(), gpu, flash, _ctx: ctx, state });
             *self.loaded_id.lock() = Some(model_id.into());
             Ok(())
         }
@@ -205,7 +229,8 @@ pub mod local {
                 // Без повторных попыток с «температурой» — предпросмотру скорость важнее
                 p.set_temperature_inc(0.0);
             }
-            p.set_audio_ctx(audio_ctx(audio.len(), quick));
+            let ac = if self.safe.load(Ordering::SeqCst) == 0 { audio_ctx(audio.len(), quick) } else { 0 };
+            p.set_audio_ctx(ac);
             let lang = if s.auto_detect { None } else { Some(s.language.as_str()) };
             p.set_language(lang.or(Some("auto")));
             let prompt = build_prompt(s);
@@ -231,7 +256,13 @@ pub mod local {
             if abort.load(Ordering::SeqCst) {
                 return Err("Прервано".into());
             }
-            res.map_err(|e| format!("Ошибка распознавания: {e}"))?;
+            res.map_err(|e| match e {
+                WhisperError::GenericError(code) => {
+                    log::error!("whisper_full вернул {code} (режим {}, audio_ctx {ac}, GPU {})", self.safe.load(Ordering::SeqCst), loaded.gpu);
+                    format!("{WHISPER_FAIL} (код {code})")
+                }
+                other => format!("{WHISPER_FAIL}: {other}"),
+            })?;
             if !quick {
                 log::info!(
                     "Распознано {:.1} с звука за {:?} ({}, потоков {}, audio_ctx {})",
@@ -239,7 +270,7 @@ pub mod local {
                     t.elapsed(),
                     if loaded.gpu { "GPU" } else { "CPU" },
                     threads(),
-                    audio_ctx(audio.len(), quick)
+                    ac
                 );
             }
             let n = loaded.state.full_n_segments().map_err(|e| e.to_string())?;
@@ -283,6 +314,9 @@ pub mod local {
             Backend { device: "Облако".into(), ..Default::default() }
         }
         pub fn unload(&self) {}
+        pub fn escalate(&self) -> bool {
+            false
+        }
         pub fn ensure_loaded(&self, _: &str, _: &Path, _: bool) -> Result<(), String> {
             Err("Эта сборка без локального распознавания — выбери облако".into())
         }

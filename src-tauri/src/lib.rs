@@ -39,6 +39,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
+                // whisper.cpp болтлив — в лог только предупреждения и ошибки (там коды сбоев)
+                .level_for("whisper_rs", log::LevelFilter::Warn)
                 .max_file_size(2_000_000)
                 .build(),
         )

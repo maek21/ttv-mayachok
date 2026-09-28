@@ -411,10 +411,21 @@ impl Engine {
             } else {
                 // Таймаут растёт с длиной записи, но «вечно» больше не бывает
                 let timeout = Duration::from_secs_f32((samples.len() as f32 / 16_000.0 * 4.0).max(60.0));
-                models::path(&me.dirs.models, &s.local_model)
-                    .ok_or_else(|| "Неизвестная модель".to_string())
-                    .and_then(|p| me.local.ensure_loaded(&s.local_model, &p, s.use_gpu))
-                    .and_then(|_| me.local.transcribe(&samples, &s, false, final_abort.clone(), timeout))
+                // Если whisper.cpp падает на быстрых настройках — повторяем ту же запись в запасном режиме
+                loop {
+                    let r = models::path(&me.dirs.models, &s.local_model)
+                        .ok_or_else(|| "Неизвестная модель".to_string())
+                        .and_then(|p| me.local.ensure_loaded(&s.local_model, &p, s.use_gpu))
+                        .and_then(|_| me.local.transcribe(&samples, &s, false, final_abort.clone(), timeout));
+                    match r {
+                        Err(e) if e.starts_with(transcribe::WHISPER_FAIL) && !final_abort.load(Ordering::SeqCst) && me.local.escalate() => {
+                            log::warn!("{e} — пробую запасной режим");
+                            me.emit(IslandPayload { phase: "processing".into(), message: "Ещё раз, надёжнее…".into(), ..Default::default() });
+                            continue;
+                        }
+                        other => break other,
+                    }
+                }
             };
             let process_ms = t.elapsed().as_millis() as i64;
             me.busy.store(false, Ordering::SeqCst);

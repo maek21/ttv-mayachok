@@ -1,6 +1,6 @@
 [package]
 name = "mayachok"
-version = "0.2.0"
+version = "0.2.1"
 description = "Маячок — голосовой ввод для Windows"
 authors = ["Mark Baranov"]
 edition = "2021"
@@ -41,7 +41,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 regex = "1"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
-whisper-rs = { version = "0.14", optional = true }
+whisper-rs = { version = "0.14", optional = true, features = ["log_backend"] }
 # Напрямую — чтобы спросить у ggml список видеокарт
 whisper-rs-sys = { version = "0.13", optional = true }
 
