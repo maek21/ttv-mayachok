@@ -121,6 +121,8 @@ pub struct Settings {
     /// local | cloud
     pub engine: String,
     pub local_model: String,
+    /// Считать на видеокарте, если сборка и драйвер это умеют
+    pub use_gpu: bool,
     pub cloud: Cloud,
     /// ru | en | uk | ...
     pub language: String,
@@ -166,6 +168,7 @@ impl Default for Settings {
             noise_filter: true,
             engine: "local".into(),
             local_model: "large-v3-turbo-q5_0".into(),
+            use_gpu: true,
             cloud: Cloud::default(),
             language: "ru".into(),
             auto_detect: true,

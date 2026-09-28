@@ -51,10 +51,32 @@ function General() {
   );
 }
 
+function useAppInfo(deps: unknown[] = []) {
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.appInfo().then((i) => alive && setInfo(i)).catch(() => {});
+    load();
+    // Модель грузится в фоне — через пару секунд устройство уже известно
+    const t = window.setTimeout(load, 2500);
+    return () => { alive = false; window.clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return info;
+}
+
+function gpuDesc(info: AppInfo | null) {
+  if (!info) return "…";
+  if (!info.gpuBuild) return "Эта сборка только для процессора. Для видеокарты поставь версию с Vulkan.";
+  if (info.gpuDevices.length === 0) return "Видеокарта с Vulkan не найдена — обнови драйвер. Пока считаю на процессоре.";
+  return info.gpuDevices.join(", ");
+}
+
 function Audio() {
   const { settings: s, update } = useSettings();
   const mics = useMics();
   const { level, error } = useMicLevel(s.micDevice, true);
+  const info = useAppInfo([s.useGpu, s.localModel, s.engine]);
   return (
     <>
       <Group>
@@ -76,6 +98,18 @@ function Audio() {
           </div>
           <div style={{ width: 360 }}>{s.engine === "local" ? <ModelPicker compact /> : <CloudFields />}</div>
         </div>
+        {s.engine === "local" && (
+          <SRow label="Считать на видеокарте" desc={gpuDesc(info)}>
+            <Toggle checked={s.useGpu && !!info?.gpuBuild} onChange={(v) => update({ useGpu: v })} label="Считать на видеокарте" />
+          </SRow>
+        )}
+        {s.engine === "local" && info && (
+          <SRow label="Сейчас считает" desc={info.backend.gpu ? undefined : `Потоков: ${info.backend.threads} · ${info.backend.cpuFeatures || "—"}`}>
+            <span className="row" style={{ gap: 8, fontSize: 13, color: info.backend.gpu ? "var(--ok)" : "var(--txt2)" }}>
+              <Icon name="cpu" size={16} />{info.loadedModel ? info.backend.device : "Модель ещё не загружена"}
+            </span>
+          </SRow>
+        )}
         <SRow label="Язык речи" desc={s.autoDetect ? "Автоопределение включено — язык выберется сам." : undefined}>
           <Select width={200} label="Язык речи" value={s.language} onChange={(v) => update({ language: v })} options={LANGUAGES} />
         </SRow>
@@ -263,11 +297,10 @@ function Privacy() {
 
 function About() {
   const { settings: s, update } = useSettings();
-  const [info, setInfo] = useState<AppInfo | null>(null);
+  const info = useAppInfo();
   const [upd, setUpd] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.appInfo().then(setInfo); }, []);
   const check = () => {
     setChecking(true); setErr(null);
     api.checkUpdate().then(setUpd).catch((e) => setErr(String(e))).finally(() => setChecking(false));
@@ -278,7 +311,8 @@ function About() {
         <Logo size={84} />
         <div className="grow col" style={{ gap: 6 }}>
           <span className="head" style={{ fontSize: 34, letterSpacing: "-0.03em" }}>Маячок</span>
-          <span className="muted">Версия {info?.version ?? "…"} · {info?.platform}{info?.gpu ? " · GPU" : ""}</span>
+          <span className="muted">Версия {info?.version ?? "…"} · {info?.platform} · {info?.gpuBuild ? "сборка с Vulkan" : "сборка для процессора"}</span>
+          {info && <span className="cap">{info.backend.device}{info.backend.gpu ? "" : ` · ${info.backend.cpuFeatures}`}</span>}
         </div>
         <Button kind="ghost" disabled={checking} onClick={check}>{checking ? "Проверяю…" : "Проверить обновления"}</Button>
       </div>

@@ -114,6 +114,7 @@ export function IslandView({ p, levels, settings, preview }: Props) {
       <Pill>
         <span style={{ width: 14, height: 14, boxSizing: "border-box", borderRadius: 7, border: "2px solid #3a3a3c", borderTopColor: "#f5f5f7", animation: "spin .8s linear infinite" }} />
         {size === "compact" ? "Секунду…" : p.message || "Распознаю…"}
+        {size !== "compact" && <span className="row" style={{ gap: 6, color: "#8e8e93", fontSize: 12, marginLeft: 4 }}><Keys keys={settings.hotkeys.cancel} />отмена</span>}
       </Pill>
     );
   } else if (p.phase === "done") {

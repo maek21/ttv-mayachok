@@ -267,6 +267,12 @@ mod imp {
         std::thread::Builder::new()
             .name("keyboard-hook".into())
             .spawn(|| unsafe {
+                // Windows снимает хук, если он отвечает дольше ~300 мс. Пока whisper грузит
+                // все ядра, обычный приоритет может не успеть — поэтому поток хука самый срочный
+                let _ = windows::Win32::System::Threading::SetThreadPriority(
+                    windows::Win32::System::Threading::GetCurrentThread(),
+                    windows::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL,
+                );
                 match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0) {
                     Ok(_hook) => {
                         log::info!("Хук клавиатуры установлен");

@@ -43,8 +43,8 @@ pub fn save_settings(app: AppHandle, settings: Settings) -> R<Settings> {
     if prev.history_days != settings.history_days {
         eng.history.apply_retention(settings.history_days);
     }
-    if prev.local_model != settings.local_model || prev.engine != settings.engine {
-        eng.local.unload();
+    if prev.local_model != settings.local_model || prev.engine != settings.engine || prev.use_gpu != settings.use_gpu {
+        // Перезагрузка модели идёт в фоне: ensure_loaded сам заметит смену модели/устройства
         eng.warm_up();
     }
     if prev.island.hide_idle != settings.island.hide_idle && !eng.is_recording() {
@@ -66,7 +66,7 @@ pub fn default_mic() -> Option<String> {
 }
 
 #[tauri::command]
-pub fn mic_test_start(app: AppHandle, device: Option<String>) -> R<String> {
+pub async fn mic_test_start(app: AppHandle, device: Option<String>) -> R<String> {
     engine::state(&app).start_mic_test(device)
 }
 
@@ -125,8 +125,10 @@ pub fn model_cancel(app: AppHandle) {
     engine::state(&app).download_cancel.store(true, Ordering::SeqCst);
 }
 
+// async: команды без async выполняются в главном потоке и подвешивают окно,
+// если модель прямо сейчас занята распознаванием
 #[tauri::command]
-pub fn model_delete(app: AppHandle, id: String) -> R<()> {
+pub async fn model_delete(app: AppHandle, id: String) -> R<()> {
     let eng = engine::state(&app);
     if eng.local.loaded_model().as_deref() == Some(id.as_str()) {
         eng.local.unload();
@@ -222,7 +224,7 @@ pub fn reinsert_text(app: AppHandle, text: String) -> R<()> {
 }
 
 #[tauri::command]
-pub fn dictation_toggle(app: AppHandle) {
+pub async fn dictation_toggle(app: AppHandle) {
     let eng = engine::state(&app);
     if eng.is_recording() {
         eng.stop();
@@ -256,10 +258,14 @@ pub fn hotkey_capture_cancel() {
 pub struct AppInfo {
     version: String,
     platform: String,
-    gpu: bool,
+    /// Сборка умеет считать на видеокарте (Vulkan/CUDA)
+    gpu_build: bool,
+    /// Видеокарты, которые нашёл ggml
+    gpu_devices: Vec<String>,
     local_available: bool,
     data_dir: String,
     loaded_model: Option<String>,
+    backend: crate::transcribe::Backend,
 }
 
 #[tauri::command]
@@ -268,10 +274,12 @@ pub fn app_info(app: AppHandle) -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION").into(),
         platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-        gpu: cfg!(any(feature = "cuda", feature = "vulkan")),
+        gpu_build: crate::transcribe::local::GPU_BUILD,
+        gpu_devices: crate::transcribe::local::gpu_devices(),
         local_available: cfg!(feature = "local-whisper"),
         data_dir: eng.dirs.data.to_string_lossy().into(),
         loaded_model: eng.local.loaded_model(),
+        backend: eng.local.backend(),
     }
 }
 

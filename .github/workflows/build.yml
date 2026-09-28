@@ -35,10 +35,23 @@ jobs:
         run: cargo test --lib
 
   windows:
-    name: Установщик Windows
+    name: Установщик Windows (${{ matrix.variant }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Основная сборка: распознавание на видеокарте через Vulkan (NVIDIA, AMD, Intel)
+          - variant: vulkan
+            features: vulkan
+            suffix: ""
+          # Запасная: только процессор, без зависимости от vulkan-1.dll
+          - variant: cpu
+            features: ""
+            suffix: "-cpu"
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      VULKAN_VERSION: 1.4.321.1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,12 +62,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # v2: флаги сборки whisper.cpp поменялись (AVX2 вместо «под процессор раннера»)
+          prefix-key: v2-avx2
+          key: ${{ matrix.variant }}
+      - name: Vulkan SDK
+        if: matrix.variant == 'vulkan'
+        shell: pwsh
+        run: |
+          curl.exe -sSL -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\vulkan-sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\Bin"
       - run: npm ci
       - name: tauri build
-        run: npx tauri build --bundles nsis msi
+        shell: pwsh
+        run: |
+          if ("${{ matrix.features }}") {
+            npx tauri build --bundles nsis msi --features "${{ matrix.features }}"
+          } else {
+            npx tauri build --bundles nsis msi
+          }
+      - name: Имена файлов
+        if: matrix.suffix != ''
+        shell: pwsh
+        run: |
+          Get-ChildItem src-tauri/target/release/bundle -Recurse -Include *.exe,*.msi |
+            Rename-Item -NewName { $_.Name -replace '_x64', '_x64${{ matrix.suffix }}' }
       - uses: actions/upload-artifact@v4
         with:
-          name: mayachok-windows
+          name: mayachok-windows-${{ matrix.variant }}
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi

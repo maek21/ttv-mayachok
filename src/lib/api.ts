@@ -25,6 +25,7 @@ export interface Settings {
   noiseFilter: boolean;
   engine: "local" | "cloud";
   localModel: string;
+  useGpu: boolean;
   cloud: { baseUrl: string; apiKey: string; model: string };
   language: string;
   autoDetect: boolean;
@@ -102,13 +103,22 @@ export interface IslandPayload {
   app: string;
 }
 
+export interface Backend {
+  device: string;
+  gpu: boolean;
+  cpuFeatures: string;
+  threads: number;
+}
+
 export interface AppInfo {
   version: string;
   platform: string;
-  gpu: boolean;
+  gpuBuild: boolean;
+  gpuDevices: string[];
   localAvailable: boolean;
   dataDir: string;
   loadedModel: string | null;
+  backend: Backend;
 }
 
 export interface UpdateInfo {

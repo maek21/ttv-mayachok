@@ -120,11 +120,14 @@ fn on_menu(app: &AppHandle, id: &str) {
     let eng = engine::state(app);
     match id {
         "dictate" => {
-            if eng.is_recording() {
-                eng.stop();
-            } else {
-                eng.start(engine::Mode::Locked, false);
-            }
+            // Не в главном потоке: открытие микрофона может занять пару секунд
+            std::thread::spawn(move || {
+                if eng.is_recording() {
+                    eng.stop();
+                } else {
+                    eng.start(engine::Mode::Locked, false);
+                }
+            });
         }
         "copy-last" => {
             if let Some(e) = eng.history.last() {

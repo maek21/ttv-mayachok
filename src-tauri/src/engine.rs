@@ -53,6 +53,8 @@ struct Session {
     target: ForegroundApp,
     from_ui: bool,
     partial: Arc<Mutex<String>>,
+    /// Прерывает живой предпросмотр, как только запись закончилась
+    abort: Arc<AtomicBool>,
 }
 
 pub struct Engine {
@@ -69,6 +71,8 @@ pub struct Engine {
     pub download_cancel: Arc<AtomicBool>,
     pub downloading: Mutex<Option<String>>,
     partial_busy: Arc<AtomicBool>,
+    /// Прерывание идущего финального распознавания (Esc во время обработки)
+    final_abort: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl Engine {
@@ -90,6 +94,7 @@ impl Engine {
             download_cancel: Arc::new(AtomicBool::new(false)),
             downloading: Mutex::new(None),
             partial_busy: Arc::new(AtomicBool::new(false)),
+            final_abort: Mutex::new(None),
         })
     }
 
@@ -140,7 +145,7 @@ impl Engine {
         let me = self.clone();
         std::thread::spawn(move || {
             if let Some(p) = models::path(&me.dirs.models, &s.local_model) {
-                if let Err(e) = me.local.ensure_loaded(&s.local_model, &p) {
+                if let Err(e) = me.local.ensure_loaded(&s.local_model, &p, s.use_gpu) {
                     log::warn!("Прогрев модели не удался: {e}");
                 }
             }
@@ -187,7 +192,22 @@ impl Engine {
                     }
                 }
             }
-            Cancel => self.cancel(true),
+            Cancel => {
+                let processing = match self.final_abort.lock().as_ref() {
+                    Some(a) => {
+                        a.store(true, Ordering::SeqCst);
+                        true
+                    }
+                    None => false,
+                };
+                if processing && !self.is_recording() {
+                    self.seq.fetch_add(1, Ordering::SeqCst);
+                    let p = self.idle_phase();
+                    self.emit(p);
+                } else {
+                    self.cancel(true);
+                }
+            }
             PasteLast => {
                 if let Some(last) = self.history.last() {
                     let restore = self.settings().clipboard_mode == "restore";
@@ -233,7 +253,17 @@ impl Engine {
         };
         let id = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let partial = Arc::new(Mutex::new(String::new()));
-        *self.session.lock() = Some(Session { id, capture, started: Instant::now(), mode, target: target.clone(), from_ui, partial: partial.clone() });
+        let abort = Arc::new(AtomicBool::new(false));
+        *self.session.lock() = Some(Session {
+            id,
+            capture,
+            started: Instant::now(),
+            mode,
+            target: target.clone(),
+            from_ui,
+            partial: partial.clone(),
+            abort: abort.clone(),
+        });
         hotkey::set_recording(true);
         if s.sounds {
             platform::play_sound(true);
@@ -245,7 +275,10 @@ impl Engine {
         // Тикер: уровень громкости, таймер, живой предпросмотр
         let me = self.clone();
         std::thread::spawn(move || {
-            let live = s.engine == "local" && s.island.size == "text";
+            // Живой предпросмотр гоняет модель каждые ~1,3 с. На видеокарте это бесплатно,
+            // на процессоре с большой моделью он съедает все ядра и тормозит финальный проход
+            let light_model = matches!(s.local_model.as_str(), "base" | "small");
+            let live = s.engine == "local" && s.island.size == "text" && (me.local.backend().gpu || light_model);
             let mut last_partial = Instant::now();
             loop {
                 std::thread::sleep(Duration::from_millis(50));
@@ -273,7 +306,7 @@ impl Engine {
                 if let Some(mut snap) = snapshot {
                     last_partial = Instant::now();
                     me.partial_busy.store(true, Ordering::SeqCst);
-                    let (me2, partial2) = (me.clone(), partial.clone());
+                    let (me2, partial2, abort2) = (me.clone(), partial.clone(), abort.clone());
                     std::thread::spawn(move || {
                         // Берём только последние 20 секунд — предпросмотру хватит
                         if snap.len() > 16_000 * 20 {
@@ -281,8 +314,8 @@ impl Engine {
                         }
                         let s = me2.settings();
                         if let Some(path) = models::path(&me2.dirs.models, &s.local_model) {
-                            if me2.local.ensure_loaded(&s.local_model, &path).is_ok() {
-                                if let Ok(t) = me2.local.transcribe(&snap, &s, true) {
+                            if me2.local.ensure_loaded(&s.local_model, &path, s.use_gpu).is_ok() {
+                                if let Ok(t) = me2.local.transcribe(&snap, &s, true, abort2, Duration::from_secs(15)) {
                                     if me2.session.lock().as_ref().map(|x| x.id == id).unwrap_or(false) && !transcribe_is_noise(&t.text) {
                                         *partial2.lock() = t.text;
                                     }
@@ -298,6 +331,7 @@ impl Engine {
 
     pub fn cancel(self: &Arc<Self>, with_sound: bool) {
         let Some(sess) = self.session.lock().take() else { return };
+        sess.abort.store(true, Ordering::SeqCst);
         drop(sess);
         hotkey::set_recording(false);
         tray::set_recording(&self.app, false);
@@ -311,7 +345,8 @@ impl Engine {
 
     pub fn stop(self: &Arc<Self>) {
         let Some(sess) = self.session.lock().take() else { return };
-        hotkey::set_recording(false);
+        // Предпросмотр больше не нужен — освобождаем модель под финальный проход
+        sess.abort.store(true, Ordering::SeqCst);
         tray::set_recording(&self.app, false);
         let s = self.settings();
         if s.sounds {
@@ -320,16 +355,21 @@ impl Engine {
         let duration = sess.started.elapsed();
         let mut samples = sess.capture.stop();
         if duration < MIN_RECORDING {
+            hotkey::set_recording(false);
             let p = self.idle_phase();
             self.emit(p);
             return;
         }
         if audio::rms(&samples) < 0.0015 {
+            hotkey::set_recording(false);
             self.flash("error", "Тишина — ничего не услышал", 0, Duration::from_millis(1800));
             return;
         }
+        // Esc во время обработки отменяет распознавание — хук продолжает его ловить
+        let final_abort = Arc::new(AtomicBool::new(false));
+        *self.final_abort.lock() = Some(final_abort.clone());
         self.busy.store(true, Ordering::SeqCst);
-        self.emit(IslandPayload { phase: "processing".into(), message: "Расставляю пунктуацию…".into(), app: sess.target.name.clone(), ..Default::default() });
+        self.emit(IslandPayload { phase: "processing".into(), message: "Распознаю…".into(), app: sess.target.name.clone(), ..Default::default() });
 
         let me = self.clone();
         std::thread::spawn(move || {
@@ -340,13 +380,21 @@ impl Engine {
             let result = if s.engine == "cloud" {
                 transcribe::cloud(&samples, &s)
             } else {
+                // Таймаут растёт с длиной записи, но «вечно» больше не бывает
+                let timeout = Duration::from_secs_f32((samples.len() as f32 / 16_000.0 * 4.0).max(60.0));
                 models::path(&me.dirs.models, &s.local_model)
                     .ok_or_else(|| "Неизвестная модель".to_string())
-                    .and_then(|p| me.local.ensure_loaded(&s.local_model, &p))
-                    .and_then(|_| me.local.transcribe(&samples, &s, false))
+                    .and_then(|p| me.local.ensure_loaded(&s.local_model, &p, s.use_gpu))
+                    .and_then(|_| me.local.transcribe(&samples, &s, false, final_abort.clone(), timeout))
             };
             let process_ms = t.elapsed().as_millis() as i64;
             me.busy.store(false, Ordering::SeqCst);
+            *me.final_abort.lock() = None;
+            hotkey::set_recording(false);
+            if final_abort.load(Ordering::SeqCst) {
+                // Отменил сам — остров уже спрятан в cancel()
+                return;
+            }
             let tr = match result {
                 Ok(tr) => tr,
                 Err(e) => {

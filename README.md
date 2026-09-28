@@ -53,12 +53,19 @@ npm run tauri dev                      # разработка
 npm run tauri build -- --bundles nsis  # установщик .exe
 ```
 
-GPU-ускорение: `npm run tauri build -- --features cuda` (нужен CUDA Toolkit) или `--features vulkan` (нужен Vulkan SDK).
+### Видеокарта или процессор
+
+- **Vulkan (основная сборка)** — `npm run tauri build -- --features vulkan`, нужен [Vulkan SDK](https://vulkan.lunarg.com/) (`VULKAN_SDK`). Работает на NVIDIA, AMD и Intel; exe требует `vulkan-1.dll`, который ставится вместе с драйвером видеокарты. Если видеокарта не нашлась — считает на процессоре.
+- **CPU** — обычная сборка без фич. Также есть `--features cuda` (нужен CUDA Toolkit).
+
+whisper.cpp всегда собирается под **AVX2 + FMA + F16C** (`src-tauri/cmake/ggml-cpu.cmake`, подключается через `.cargo/config.toml`). Без этого ggml либо подстраивается под процессор машины сборки (на CI — AVX-512, и exe падает на домашних CPU), либо при кросс-сборке откатывается до SSE4.2 и работает в разы медленнее. После правки этого файла пересобери whisper: `cargo clean -p whisper-rs-sys`.
+
+Ещё два ускорения на процессоре: `audio_ctx` по длине фразы (whisper иначе всегда считает 30-секундное окно) и flash attention. На 4-ядерном Xeon 2,1 ГГц фраза в 5 секунд на large-v3-turbo q5: 26 с → 5,7 с.
 
 Кросс-сборка из Linux: `cargo install cargo-xwin`, clang ≥ 19 как `clang-cl`, `nsis`, затем
 `npx tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis`.
 
-CI (`.github/workflows/build.yml`) на каждый пуш собирает установщик под Windows и кладёт его в артефакты; на тег `v*` — создаёт релиз.
+CI (`.github/workflows/build.yml`) на каждый пуш собирает два установщика под Windows — `mayachok-windows-vulkan` и `mayachok-windows-cpu` — и кладёт их в артефакты; на тег `v*` — создаёт релиз.
 
 ## Данные
 

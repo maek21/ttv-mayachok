@@ -1,0 +1,4 @@
+[env]
+# whisper-rs-sys пробрасывает в CMake только переменные WHISPER_* и CMAKE_*,
+# поэтому флаги ggml задаём через файл, который CMake подключает перед project()
+CMAKE_PROJECT_INCLUDE_BEFORE = { value = "cmake/ggml-cpu.cmake", relative = true }

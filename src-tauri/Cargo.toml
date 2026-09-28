@@ -1,6 +1,6 @@
 [package]
 name = "mayachok"
-version = "0.1.0"
+version = "0.1.1"
 description = "Маячок — голосовой ввод для Windows"
 authors = ["Mark Baranov"]
 edition = "2021"
@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 [features]
 default = ["local-whisper"]
 # Локальное распознавание через whisper.cpp
-local-whisper = ["dep:whisper-rs"]
+local-whisper = ["dep:whisper-rs", "dep:whisper-rs-sys"]
 # Ускорение на видеокарте (нужен соответствующий SDK при сборке)
 cuda = ["local-whisper", "whisper-rs/cuda"]
 vulkan = ["local-whisper", "whisper-rs/vulkan"]
@@ -42,6 +42,8 @@ regex = "1"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 whisper-rs = { version = "0.14", optional = true }
+# Напрямую — чтобы спросить у ggml список видеокарт
+whisper-rs-sys = { version = "0.13", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

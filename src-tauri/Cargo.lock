@@ -2442,7 +2442,7 @@ dependencies = [
 
 [[package]]
 name = "mayachok"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -2465,6 +2465,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "uuid",
  "whisper-rs",
+ "whisper-rs-sys",
  "windows 0.61.3",
 ]
 
