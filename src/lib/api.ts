@@ -40,10 +40,56 @@ export interface Settings {
   keepAudio: boolean;
   excludedApps: string[];
   dictionary: { words: string[]; rules: Rule[] };
+  reminders: RemindersCfg;
   autoUpdate: boolean;
   updateChannel: "stable" | "beta";
   pausedUntil: number | null;
 }
+
+export interface RemindersCfg {
+  enabled: boolean;
+  triggers: string[];
+  defaultHour: number;
+  urgentPins: boolean;
+  pinBeforeMin: number;
+  windowsToast: boolean;
+  leadMin: number;
+  snoozeMin: number;
+  sound: boolean;
+}
+
+export type Repeat = "none" | "daily" | "weekdays" | "weekly" | "monthly";
+
+export interface Reminder {
+  id: number;
+  text: string;
+  dueAt: string;
+  createdAt: string;
+  phrase: string;
+  app: string;
+  urgent: boolean;
+  repeat: Repeat;
+  leadMin: number;
+  toast: boolean;
+  doneAt: string | null;
+  fired: boolean;
+  preNotified: boolean;
+}
+
+export interface IslandReminders {
+  pins: Reminder[];
+  firing: Reminder | null;
+  justSet: Reminder | null;
+}
+
+export interface ReminderPreview {
+  text: string;
+  dueAt: string;
+  urgent: boolean;
+  repeat: Repeat;
+}
+
+export type ReminderAction = "done" | "snooze" | "hour" | "tomorrow" | "undone" | "delete";
 
 export interface Entry {
   id: number;
@@ -163,6 +209,13 @@ export const api = {
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
   openLogs: () => invoke<void>("open_logs"),
   quit: () => invoke<void>("quit_app"),
+  remindersList: (done: boolean) => invoke<Reminder[]>("reminders_list", { done }),
+  reminderPreview: (text: string) => invoke<ReminderPreview | null>("reminder_preview", { text }),
+  reminderCreate: (text: string) => invoke<Reminder>("reminder_create", { text }),
+  reminderUpdate: (reminder: Reminder) => invoke<Reminder>("reminder_update", { reminder }),
+  reminderAction: (id: number, action: ReminderAction) => invoke<void>("reminder_action", { id, action }),
+  islandReminders: () => invoke<IslandReminders>("island_reminders"),
+  islandHit: (rect: [number, number, number, number] | null) => invoke<void>("island_hit", { rect }),
 };
 
 export function on<T>(event: string, cb: (payload: T) => void): () => void {

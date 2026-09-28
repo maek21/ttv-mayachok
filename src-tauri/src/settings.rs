@@ -102,6 +102,41 @@ impl Default for Dictionary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct RemindersCfg {
+    /// Фразы с «напомни/маячок/срочно» становятся напоминаниями
+    pub enabled: bool,
+    pub triggers: Vec<String>,
+    /// Час, если сказан только день («в пятницу»)
+    pub default_hour: u32,
+    /// Срочные всегда на острове
+    pub urgent_pins: bool,
+    /// Любой маячок — на остров за столько минут (0 — нет)
+    pub pin_before_min: u32,
+    pub windows_toast: bool,
+    /// Предупредить заранее, минут (0 — нет)
+    pub lead_min: u32,
+    pub snooze_min: u32,
+    pub sound: bool,
+}
+
+impl Default for RemindersCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            triggers: vec!["напомни".into(), "маячок".into(), "срочно".into()],
+            default_hour: 9,
+            urgent_pins: true,
+            pin_before_min: 60,
+            windows_toast: true,
+            lead_min: 10,
+            snooze_min: 10,
+            sound: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub onboarded: bool,
     // Общие
@@ -144,6 +179,8 @@ pub struct Settings {
     pub excluded_apps: Vec<String>,
     // Словарь
     pub dictionary: Dictionary,
+    // Маячки
+    pub reminders: RemindersCfg,
     // О программе
     pub auto_update: bool,
     /// stable | beta
@@ -183,6 +220,7 @@ impl Default for Settings {
             keep_audio: true,
             excluded_apps: vec!["KeePassXC".into(), "1Password".into(), "Bitwarden".into()],
             dictionary: Dictionary::default(),
+            reminders: RemindersCfg::default(),
             auto_update: true,
             update_channel: "stable".into(),
             paused_until: None,

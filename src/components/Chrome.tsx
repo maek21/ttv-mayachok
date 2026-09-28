@@ -1,10 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
-import { api, on, type IslandPayload } from "../lib/api";
+import { api, on, type IslandPayload, type IslandReminders } from "../lib/api";
 import { useSettings } from "../lib/settings";
 import { Icon, Keys, Logo, type IconName } from "./ui";
 
-export type Page = "home" | "history" | "dictionary" | "settings";
+export type Page = "home" | "history" | "reminders" | "dictionary" | "settings";
 
 export function TitleBar({ title = "" }: { title?: string }) {
   const w = getCurrentWindow();
@@ -23,6 +23,7 @@ export function TitleBar({ title = "" }: { title?: string }) {
 const NAV: { id: Page; label: string; icon: IconName }[] = [
   { id: "home", label: "Главная", icon: "home" },
   { id: "history", label: "История", icon: "clock" },
+  { id: "reminders", label: "Маячки", icon: "bell" },
   { id: "dictionary", label: "Словарь", icon: "book" },
   { id: "settings", label: "Настройки", icon: "gear" },
 ];
@@ -36,8 +37,19 @@ export function useEngineState() {
   return state;
 }
 
+/** Сколько маячков на острове — бейдж в сайдбаре */
+function usePinCount() {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    api.islandReminders().then((r) => setN(r.pins.length)).catch(() => {});
+    return on<IslandReminders>("island-reminders", (r) => setN(r.pins.length));
+  }, []);
+  return n;
+}
+
 export function Sidebar({ page, go }: { page: Page; go: (p: Page) => void }) {
   const { settings } = useSettings();
+  const pins = usePinCount();
   const [mic, setMic] = useState<string | null>(null);
   const engine = useEngineState();
 
@@ -62,7 +74,10 @@ export function Sidebar({ page, go }: { page: Page; go: (p: Page) => void }) {
       {NAV.map((n) => (
         <button key={n.id} type="button" className={`nav ${page === n.id ? "active" : ""}`} onClick={() => go(n.id)}>
           <Icon name={n.icon} />
-          {n.label}
+          <span className="grow">{n.label}</span>
+          {n.id === "reminders" && pins > 0 && (
+            <span className="num" style={{ minWidth: 20, height: 20, padding: "0 6px", boxSizing: "border-box", borderRadius: 10, background: "var(--accent)", color: "#fff", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{pins}</span>
+          )}
         </button>
       ))}
       <div className="grow" data-tauri-drag-region />

@@ -5,6 +5,7 @@ use crate::history::{count_words, History, NewEntry};
 use crate::platform::{self, ForegroundApp};
 use crate::settings::Settings;
 use crate::transcribe::{self, local::LocalEngine};
+use crate::reminders::{self as rem, IslandReminders, Reminders};
 use crate::{hotkey, island, models, tray};
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
@@ -62,6 +63,11 @@ pub struct Engine {
     pub dirs: Dirs,
     pub settings: RwLock<Settings>,
     pub history: History,
+    pub reminders: Reminders,
+    /// Что из маячков сейчас на острове
+    pub rem_island: Mutex<IslandReminders>,
+    /// Прямоугольник острова в окне (CSS px) — по нему включаем клики мышью
+    pub hit_rect: Mutex<Option<[f64; 4]>>,
     pub local: LocalEngine,
     session: Mutex<Option<Session>>,
     busy: AtomicBool,
@@ -79,12 +85,16 @@ impl Engine {
     pub fn new(app: AppHandle, dirs: Dirs) -> Result<Self, String> {
         let settings = Settings::load(&dirs.config);
         let history = History::open(&dirs.data)?;
+        let reminders = Reminders::open(&dirs.data)?;
         history.apply_retention(settings.history_days);
         Ok(Self {
             app,
             dirs,
             settings: RwLock::new(settings),
             history,
+            reminders,
+            rem_island: Mutex::new(IslandReminders::default()),
+            hit_rect: Mutex::new(None),
             local: LocalEngine::new(),
             session: Mutex::new(None),
             busy: AtomicBool::new(false),
@@ -109,11 +119,22 @@ impl Engine {
     pub fn emit(&self, p: IslandPayload) {
         *self.last_payload.lock() = p.clone();
         let _ = self.app.emit("island", &p);
+        self.sync_island_visibility();
+    }
+
+    /// Остров виден, если идёт диктовка, либо есть закреплённые маячки / «Пора!» / «Поставил»
+    pub fn sync_island_visibility(&self) {
         let s = self.settings();
-        match p.phase.as_str() {
-            "hidden" => island::hide(&self.app),
-            "idle" if s.island.hide_idle => island::hide(&self.app),
-            _ => island::show(&self.app, &s),
+        let phase = self.last_payload.lock().phase.clone();
+        let dictation_quiet = phase == "hidden" || (phase == "idle" && s.island.hide_idle);
+        let rem = {
+            let r = self.rem_island.lock();
+            !r.pins.is_empty() || r.firing.is_some() || r.just_set.is_some()
+        };
+        if dictation_quiet && !rem {
+            island::hide(&self.app);
+        } else {
+            island::show(&self.app, &s);
         }
     }
 
@@ -193,6 +214,14 @@ impl Engine {
                 }
             }
             Cancel => {
+                // Esc сразу после «Маячок поставлен» — передумал
+                let just = self.rem_island.lock().just_set.take();
+                if let Some(r) = just {
+                    let _ = self.reminders.delete(r.id);
+                    hotkey::set_recording(self.is_recording());
+                    self.refresh_reminders(true);
+                    return;
+                }
                 let processing = match self.final_abort.lock().as_ref() {
                     Some(a) => {
                         a.store(true, Ordering::SeqCst);
@@ -407,6 +436,17 @@ impl Engine {
                 me.flash("error", "Ничего не разобрал", 0, Duration::from_millis(1800));
                 return;
             }
+            // «напомни…», «маячок…», «срочно…» — это не текст, а маячок
+            if s.reminders.enabled {
+                let now_local = chrono::Local::now().naive_local();
+                if let Some(parsed) = crate::remind_parse::parse(&tr.text, &s.reminders.triggers, now_local, s.reminders.default_hour) {
+                    match me.reminders.create(&parsed, &tr.text, &sess.target.name) {
+                        Ok(r) => me.announce_reminder(r),
+                        Err(e) => me.flash("error", &format!("Маячок не сохранился: {e}"), 0, Duration::from_millis(2500)),
+                    }
+                    return;
+                }
+            }
             let text = crate::postprocess::process(&tr.text, &s);
             let words = count_words(&text);
 
@@ -483,4 +523,183 @@ fn partial_cleanup(p: &Arc<Mutex<String>>) -> String {
 
 pub fn state(app: &AppHandle) -> Arc<Engine> {
     app.state::<Arc<Engine>>().inner().clone()
+}
+
+// ======================= Маячки =======================
+
+const SET_HOLD: Duration = Duration::from_millis(3500);
+const FIRE_HOLD: Duration = Duration::from_secs(120);
+
+impl Engine {
+    /// Показать «Маячок поставлен» на пару секунд; Esc в это время отменяет
+    pub fn announce_reminder(self: &Arc<Self>, r: rem::Reminder) {
+        let id = r.id;
+        self.rem_island.lock().just_set = Some(r);
+        hotkey::set_recording(true);
+        // Диктовочная часть острова гаснет — дальше показывает маячок
+        let p = self.idle_phase();
+        *self.last_payload.lock() = p.clone();
+        let _ = self.app.emit("island", &p);
+        self.refresh_reminders(true);
+        let me = self.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(SET_HOLD);
+            let mut st = me.rem_island.lock();
+            if st.just_set.as_ref().map(|x| x.id == id).unwrap_or(false) {
+                st.just_set = None;
+                drop(st);
+                hotkey::set_recording(me.is_recording());
+                me.refresh_reminders(true);
+            }
+        });
+    }
+
+    /// Пересчитать закреплённые и, если что-то поменялось (или `force`), сообщить окнам
+    pub fn refresh_reminders(&self, force: bool) {
+        let s = self.settings();
+        let active = self.reminders.list(false).unwrap_or_default();
+        let pins = rem::pins(&active, chrono::Utc::now(), s.reminders.pin_before_min, s.reminders.urgent_pins);
+        let payload = {
+            let mut st = self.rem_island.lock();
+            // «Пора!» для удалённого/выполненного — убрать
+            if let Some(f) = &st.firing {
+                if !active.iter().any(|a| a.id == f.id && a.fired) {
+                    st.firing = None;
+                }
+            }
+            let key = |v: &Vec<rem::Reminder>| v.iter().map(|r| (r.id, r.due_at.clone(), r.fired, r.text.clone(), r.urgent)).collect::<Vec<_>>();
+            let changed = key(&st.pins) != key(&pins);
+            if !changed && !force {
+                return;
+            }
+            st.pins = pins;
+            st.clone()
+        };
+        let _ = self.app.emit("island-reminders", &payload);
+        let _ = self.app.emit("reminders-changed", ());
+        self.sync_island_visibility();
+        tray::refresh(&self.app);
+    }
+
+    fn fire(self: &Arc<Self>, r: rem::Reminder) {
+        let s = self.settings();
+        self.reminders.mark_fired(r.id);
+        let mut fired = r.clone();
+        fired.fired = true;
+        self.rem_island.lock().firing = Some(fired);
+        log::info!("Маячок #{}: «{}»", r.id, r.text);
+        if s.reminders.sound {
+            platform::play_sound(true);
+        }
+        if s.reminders.windows_toast && r.toast {
+            let when = r.due().with_timezone(&chrono::Local).format("%H:%M").to_string();
+            crate::toast::show_reminder(&self.app, r.id, &r.text, &format!("Сейчас · {when}"), true);
+        }
+        self.refresh_reminders(true);
+        let (me, id) = (self.clone(), r.id);
+        std::thread::spawn(move || {
+            std::thread::sleep(FIRE_HOLD);
+            let mut st = me.rem_island.lock();
+            if st.firing.as_ref().map(|x| x.id == id).unwrap_or(false) {
+                // Никто не нажал — сворачиваем в «просрочено» на острове
+                st.firing = None;
+                drop(st);
+                me.refresh_reminders(true);
+            }
+        });
+    }
+
+    /// Раз в секунду: сработавшие, предупреждения заранее, закреплённые
+    pub fn tick_reminders(self: &Arc<Self>) {
+        let s = self.settings();
+        let now = chrono::Utc::now();
+        let active = match self.reminders.list(false) {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        for r in active {
+            let due = r.due();
+            let lead = if r.lead_min >= 0 { r.lead_min } else { s.reminders.lead_min as i64 };
+            if !r.fired && now >= due {
+                self.fire(r);
+            } else if !r.fired && !r.pre_notified && lead > 0 && now >= due - chrono::Duration::minutes(lead) {
+                self.reminders.mark_pre(r.id);
+                if s.reminders.windows_toast && r.toast {
+                    let left = ((due - now).num_seconds() as f64 / 60.0).ceil() as i64;
+                    crate::toast::show_reminder(&self.app, r.id, &r.text, &format!("Через {left} мин"), false);
+                }
+            }
+        }
+        self.refresh_reminders(false);
+    }
+
+    /// Действие с кнопки острова, уведомления или из приложения
+    pub fn reminder_action(self: &Arc<Self>, id: i64, action: &str) -> Result<(), String> {
+        let s = self.settings();
+        match action {
+            "done" => self.reminders.done(id)?,
+            "snooze" => self.reminders.snooze(id, s.reminders.snooze_min as i64)?,
+            "hour" => self.reminders.snooze(id, 60)?,
+            "tomorrow" => self.reminders.snooze_tomorrow(id, s.reminders.default_hour)?,
+            "undone" => self.reminders.undone(id)?,
+            "delete" => self.reminders.delete(id)?,
+            _ => return Err("Неизвестное действие".into()),
+        }
+        {
+            let mut st = self.rem_island.lock();
+            if st.firing.as_ref().map(|x| x.id == id).unwrap_or(false) {
+                st.firing = None;
+            }
+            if st.just_set.as_ref().map(|x| x.id == id).unwrap_or(false) {
+                st.just_set = None;
+            }
+        }
+        self.refresh_reminders(true);
+        Ok(())
+    }
+
+    pub fn start_reminder_loop(self: &Arc<Self>) {
+        let me = self.clone();
+        std::thread::Builder::new()
+            .name("reminders".into())
+            .spawn(move || loop {
+                me.tick_reminders();
+                std::thread::sleep(Duration::from_secs(1));
+            })
+            .expect("reminders thread");
+    }
+
+    /// Остров не мешает кликам, пока курсор не над ним: окно прозрачное и большое,
+    /// поэтому включаем мышь только когда курсор внутри прямоугольника острова.
+    pub fn start_hit_test_loop(self: &Arc<Self>) {
+        let me = self.clone();
+        std::thread::Builder::new()
+            .name("island-hit".into())
+            .spawn(move || {
+                let mut interactive = false;
+                loop {
+                    std::thread::sleep(Duration::from_millis(50));
+                    let rect = *me.hit_rect.lock();
+                    let Some(w) = me.app.get_webview_window(island::LABEL) else { continue };
+                    let want = match rect {
+                        Some([x, y, rw, rh]) if w.is_visible().unwrap_or(false) => {
+                            match (me.app.cursor_position(), w.outer_position(), w.scale_factor()) {
+                                (Ok(c), Ok(pos), Ok(sf)) => {
+                                    let (lx, ly) = ((c.x - pos.x as f64) / sf, (c.y - pos.y as f64) / sf);
+                                    lx >= x && lx <= x + rw && ly >= y && ly <= y + rh
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+                    if want != interactive {
+                        interactive = want;
+                        let _ = w.set_ignore_cursor_events(!want);
+                        let _ = me.app.emit("island-hover", want);
+                    }
+                }
+            })
+            .expect("hit-test thread");
+    }
 }

@@ -49,6 +49,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None::<&str>,
     )?;
     let open = MenuItem::with_id(app, "open", "Открыть Маячок", true, None::<&str>)?;
+    let active = eng.reminders.list(false).unwrap_or_default();
+    let reminders_item = MenuItem::with_id(
+        app,
+        "reminders",
+        if active.is_empty() { "Маячки".to_string() } else { format!("Маячки · {}", active.len()) },
+        true,
+        None::<&str>,
+    )?;
 
     let mut mic_items: Vec<CheckMenuItem<Wry>> = vec![CheckMenuItem::with_id(
         app,
@@ -93,6 +101,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &dictate,
             &copy_last,
             &open,
+            &reminders_item,
             &sep()?,
             &mic,
             &lang,
@@ -135,6 +144,10 @@ fn on_menu(app: &AppHandle, id: &str) {
             }
         }
         "open" => crate::show_main(app),
+        "reminders" => {
+            crate::show_main(app);
+            let _ = app.emit("navigate", "reminders");
+        }
         "settings" => {
             crate::show_main(app);
             let _ = app.emit("navigate", "settings");

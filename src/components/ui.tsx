@@ -31,6 +31,13 @@ const PATHS = {
   arrowr: <><path d="M5 12h14" /><path d="M13 6l6 6-6 6" /></>,
   folder: <path d="M3.5 6.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />,
   stop: <rect x="6.5" y="6.5" width="11" height="11" rx="2" />,
+  bell: <><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 20.5a2 2 0 0 0 4 0" /></>,
+  repeat: <><path d="M4 11V9a3 3 0 0 1 3-3h12" /><path d="M16 3l3 3-3 3" /><path d="M20 13v2a3 3 0 0 1-3 3H5" /><path d="M8 21l-3-3 3-3" /></>,
+  pin: <><path d="M9 4h6l-1 6 3 3H7l3-3z" /><path d="M12 13v8" /></>,
+  snooze: <><circle cx="12" cy="13" r="7.5" /><path d="M12 9.5V13l2.5 1.5" /><path d="M5 3.5L2.5 6M19 3.5L21.5 6" /></>,
+  cal: <><rect x="4" y="5.5" width="16" height="15" rx="2.5" /><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" /></>,
+  circle: <circle cx="12" cy="12" r="8.5" />,
+  checkc: <><circle cx="12" cy="12" r="8.5" /><path d="M8 12.3l2.8 2.7L16 9.5" /></>,
 } as const;
 
 export type IconName = keyof typeof PATHS;

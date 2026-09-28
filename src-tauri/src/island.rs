@@ -4,8 +4,8 @@ use crate::settings::Settings;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub const LABEL: &str = "island";
-const W: f64 = 640.0;
-const H: f64 = 240.0;
+const W: f64 = 760.0;
+const H: f64 = 360.0;
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/island".into()))

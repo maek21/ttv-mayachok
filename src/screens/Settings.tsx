@@ -9,13 +9,14 @@ import { LANGUAGES } from "../lib/langs";
 import { useSettings } from "../lib/settings";
 import { CloudFields, ModelPicker } from "./Onboarding";
 
-export type Section = "general" | "audio" | "hotkeys" | "island" | "privacy" | "about";
+export type Section = "general" | "audio" | "hotkeys" | "island" | "reminders" | "privacy" | "about";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "Общие" },
   { id: "audio", label: "Звук и распознавание" },
   { id: "hotkeys", label: "Горячие клавиши" },
   { id: "island", label: "Остров" },
+  { id: "reminders", label: "Маячки" },
   { id: "privacy", label: "Приватность" },
   { id: "about", label: "О программе" },
 ];
@@ -218,6 +219,47 @@ function Island() {
   );
 }
 
+function RemindersSettings() {
+  const { settings: s, update } = useSettings();
+  const set = (patch: Partial<S["reminders"]>) => update((x) => ({ reminders: { ...x.reminders, ...patch } }));
+  const r = s.reminders;
+  return (
+    <>
+      <Group>
+        <SRow label="Голосовые команды" desc="Фраза начинается со слова-триггера — это напоминание, а не текст для вставки.">
+          <Toggle checked={r.enabled} onChange={(v) => set({ enabled: v })} />
+        </SRow>
+        <SRow label="Слова-триггеры" desc="«срочно» сразу закрепляет маячок на острове.">
+          <ListEditor items={r.triggers} onChange={(v) => set({ triggers: v })} placeholder="Добавить" />
+        </SRow>
+        <SRow label="Время без часов" desc="«в пятницу» — во сколько напомнить.">
+          <Select width={140} value={String(r.defaultHour)} onChange={(v) => set({ defaultHour: Number(v) })}
+            options={[7, 8, 9, 10, 11, 12].map((h) => ({ value: String(h), label: `${h}:00` }))} />
+        </SRow>
+      </Group>
+      <Group>
+        <SRow label="Срочные — всегда на острове" desc="С обратным отсчётом, пока не отметишь «Готово».">
+          <Toggle checked={r.urgentPins} onChange={(v) => set({ urgentPins: v })} />
+        </SRow>
+        <SRow label="Любой маячок на остров" desc="За сколько до срока показывать отсчёт.">
+          <Select width={180} value={String(r.pinBeforeMin)} onChange={(v) => set({ pinBeforeMin: Number(v) })}
+            options={[{ value: "0", label: "Только срочные" }, { value: "15", label: "За 15 минут" }, { value: "30", label: "За 30 минут" }, { value: "60", label: "За 1 час" }, { value: "180", label: "За 3 часа" }]} />
+        </SRow>
+        <SRow label="Уведомление Windows" desc="Остаётся в Центре уведомлений."><Toggle checked={r.windowsToast} onChange={(v) => set({ windowsToast: v })} /></SRow>
+        <SRow label="Предупредить заранее">
+          <Select width={180} value={String(r.leadMin)} onChange={(v) => set({ leadMin: Number(v) })}
+            options={[{ value: "0", label: "Не надо" }, { value: "5", label: "За 5 минут" }, { value: "10", label: "За 10 минут" }, { value: "30", label: "За 30 минут" }]} />
+        </SRow>
+        <SRow label="Отложить по кнопке">
+          <Segmented value={String(r.snoozeMin)} onChange={(v) => set({ snoozeMin: Number(v) })}
+            options={[{ value: "5", label: "5 мин" }, { value: "10", label: "10 мин" }, { value: "30", label: "30 мин" }]} />
+        </SRow>
+        <SRow label="Звук"><Toggle checked={r.sound} onChange={(v) => set({ sound: v })} /></SRow>
+      </Group>
+    </>
+  );
+}
+
 function ListEditor({ items, onChange, placeholder }: { items: string[]; onChange: (v: string[]) => void; placeholder: string }) {
   const [v, setV] = useState("");
   const add = () => { const t = v.trim(); if (t && !items.includes(t)) onChange([...items, t]); setV(""); };
@@ -340,7 +382,7 @@ function About() {
 
 const TITLES: Record<Section, string> = Object.fromEntries(SECTIONS.map((x) => [x.id, x.label])) as Record<Section, string>;
 const BODIES: Record<Section, () => ReactNode> = {
-  general: General, audio: Audio, hotkeys: Hotkeys, island: Island, privacy: Privacy, about: About,
+  general: General, audio: Audio, hotkeys: Hotkeys, island: Island, reminders: RemindersSettings, privacy: Privacy, about: About,
 };
 
 export function Settings({ section, setSection }: { section: Section; setSection: (s: Section) => void }) {

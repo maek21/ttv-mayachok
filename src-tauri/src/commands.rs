@@ -339,3 +339,74 @@ pub fn open_logs(app: AppHandle) -> R<()> {
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
+
+// ======================= Маячки =======================
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderPreview {
+    text: String,
+    due_at: String,
+    urgent: bool,
+    repeat: String,
+}
+
+fn parse_free(app: &AppHandle, text: &str) -> Option<crate::remind_parse::Parsed> {
+    let s = engine::state(app).settings();
+    let now = chrono::Local::now().naive_local();
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    // В поле ввода триггер не обязателен: «через 20 минут чайник»
+    crate::remind_parse::parse(t, &s.reminders.triggers, now, s.reminders.default_hour)
+        .or_else(|| crate::remind_parse::parse(&format!("напомни {t}"), &["напомни".to_string()], now, s.reminders.default_hour))
+}
+
+#[tauri::command]
+pub fn reminders_list(app: AppHandle, done: bool) -> R<Vec<crate::reminders::Reminder>> {
+    engine::state(&app).reminders.list(done)
+}
+
+#[tauri::command]
+pub fn reminder_preview(app: AppHandle, text: String) -> Option<ReminderPreview> {
+    parse_free(&app, &text).map(|p| ReminderPreview {
+        text: p.text,
+        due_at: crate::reminders::local_to_utc(p.due).to_rfc3339(),
+        urgent: p.urgent,
+        repeat: p.repeat.as_str().into(),
+    })
+}
+
+#[tauri::command]
+pub fn reminder_create(app: AppHandle, text: String) -> R<crate::reminders::Reminder> {
+    let p = parse_free(&app, &text).ok_or("Не понял, что и когда напомнить")?;
+    let eng = engine::state(&app);
+    let r = eng.reminders.create(&p, "", "")?;
+    eng.refresh_reminders(true);
+    Ok(r)
+}
+
+#[tauri::command]
+pub fn reminder_update(app: AppHandle, reminder: crate::reminders::Reminder) -> R<crate::reminders::Reminder> {
+    let eng = engine::state(&app);
+    let r = eng.reminders.update(&reminder)?;
+    eng.refresh_reminders(true);
+    Ok(r)
+}
+
+#[tauri::command]
+pub fn reminder_action(app: AppHandle, id: i64, action: String) -> R<()> {
+    engine::state(&app).reminder_action(id, &action)
+}
+
+#[tauri::command]
+pub fn island_reminders(app: AppHandle) -> crate::reminders::IslandReminders {
+    engine::state(&app).rem_island.lock().clone()
+}
+
+/// Остров сообщает, где он нарисован (CSS px), чтобы по нему можно было кликать
+#[tauri::command]
+pub fn island_hit(app: AppHandle, rect: Option<[f64; 4]>) {
+    *engine::state(&app).hit_rect.lock() = rect;
+}

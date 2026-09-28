@@ -7,6 +7,9 @@ mod island;
 mod models;
 mod platform;
 mod postprocess;
+mod remind_parse;
+mod reminders;
+mod toast;
 mod settings;
 mod transcribe;
 mod tray;
@@ -80,6 +83,8 @@ pub fn run() {
             }
 
             eng.warm_up();
+            eng.start_reminder_loop();
+            eng.start_hit_test_loop();
             if !s.island.hide_idle {
                 eng.emit(engine::IslandPayload { phase: "idle".into(), ..Default::default() });
             }
@@ -137,6 +142,13 @@ pub fn run() {
             commands::check_update,
             commands::open_logs,
             commands::quit_app,
+            commands::reminders_list,
+            commands::reminder_preview,
+            commands::reminder_create,
+            commands::reminder_update,
+            commands::reminder_action,
+            commands::island_reminders,
+            commands::island_hit,
         ])
         .run(tauri::generate_context!())
         .expect("не удалось запустить Маячок");

@@ -7,6 +7,7 @@ import { Dictionary } from "./screens/Dictionary";
 import { History } from "./screens/History";
 import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
+import { Reminders } from "./screens/Reminders";
 import { Settings, type Section } from "./screens/Settings";
 
 /** Тема, акцент и «живой» шрифт — общие для обоих окон */
@@ -49,6 +50,7 @@ export function App() {
 
   useEffect(() => on<string>("navigate", (p) => {
     if (p === "settings") setPage("settings");
+    if (p === "reminders") setPage("reminders");
   }), []);
 
   useEffect(() => {
@@ -70,6 +72,7 @@ export function App() {
           <TitleBar />
           {page === "home" && <Home go={setPage} />}
           {page === "history" && <History />}
+          {page === "reminders" && <Reminders />}
           {page === "dictionary" && <Dictionary />}
           {page === "settings" && <Settings section={section} setSection={setSection} />}
         </main>

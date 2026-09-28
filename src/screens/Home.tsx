@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { useEngineState, type Page } from "../components/Chrome";
 import { Button, Icon } from "../components/ui";
 import { api, on, type Entry, type Stats } from "../lib/api";
-import { fmtNum, greeting, plural, useSettings } from "../lib/settings";
+import { fmtNum, greeting, plural } from "../lib/settings";
 import { EntryRow } from "./History";
+import { useReminders } from "./Reminders";
+import { dueMs, fmtLeft, Ring, ringPct, urgency, useNow } from "../lib/remind";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
@@ -43,7 +45,6 @@ function Week({ stats }: { stats: Stats }) {
 }
 
 export function Home({ go }: { go: (p: Page) => void }) {
-  const { settings } = useSettings();
   const engine = useEngineState();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recent, setRecent] = useState<Entry[]>([]);
@@ -58,6 +59,9 @@ export function Home({ go }: { go: (p: Page) => void }) {
   }, []);
 
   const recording = engine?.phase === "listening";
+  const active = useReminders(false);
+  const now = useNow(1000);
+  const upcoming = (active ?? []).slice(0, 3);
   const s = stats;
   const vsAvg = s && s.wordsAvg > 0 ? Math.round(((s.wordsToday - s.wordsAvg) / s.wordsAvg) * 100) : null;
   const tagline = !s || s.totalCount === 0
@@ -107,14 +111,28 @@ export function Home({ go }: { go: (p: Page) => void }) {
             </div>
             {s && <Week stats={s} />}
           </div>
-          <div className="card row" style={{ boxSizing: "border-box", padding: "16px 18px", alignItems: "flex-start" }}>
-            <span style={{ color: "var(--accent)", display: "flex", paddingTop: 2 }}><Icon name="info" /></span>
-            <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--txt2)" }}>
-              {settings.voiceCommands
-                ? "Скажи «новая строка» или «новый абзац» — Маячок сам перенесёт текст."
-                : `Последнюю фразу можно вставить ещё раз: ${settings.hotkeys.pasteLast.join(" + ")}.`}
-            </span>
-          </div>
+          {upcoming.length > 0 ? (
+            <div className="card col" style={{ boxSizing: "border-box", padding: "16px 18px 10px", gap: 4 }}>
+              <div className="row" style={{ justifyContent: "space-between", paddingBottom: 6 }}>
+                <h2 style={{ fontSize: 16 }}>Ближайшие маячки</h2>
+                <button type="button" className="btn link" style={{ height: 22, padding: 0, color: "var(--txt2)" }} onClick={() => go("reminders")}>Все <Icon name="chev" size={14} /></button>
+              </div>
+              {upcoming.map((r) => (
+                <div key={r.id} className="row" style={{ gap: 12, padding: "6px 0" }}>
+                  <Ring pct={ringPct(r, now)} size={24} stroke={3} color={urgency(r, now) === "over" ? "var(--warn)" : "var(--accent)"} track="var(--surf2)" />
+                  <span className="grow ellipsis" style={{ fontSize: 14 }}>{r.text}</span>
+                  <span className="cap num" style={{ color: urgency(r, now) === "calm" ? undefined : "var(--accent)" }}>{dueMs(r) > now ? fmtLeft(dueMs(r) - now) : "пора"}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="card row" style={{ boxSizing: "border-box", padding: "16px 18px", alignItems: "flex-start" }}>
+              <span style={{ color: "var(--accent)", display: "flex", paddingTop: 2 }}><Icon name="bell" /></span>
+              <span style={{ fontSize: 13, lineHeight: 1.5, color: "var(--txt2)" }}>
+                Скажи «напомни через 20 минут выключить духовку» — появится маячок с отсчётом на острове.
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>

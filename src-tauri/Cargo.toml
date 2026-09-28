@@ -1,6 +1,6 @@
 [package]
 name = "mayachok"
-version = "0.1.1"
+version = "0.2.0"
 description = "Маячок — голосовой ввод для Windows"
 authors = ["Mark Baranov"]
 edition = "2021"
@@ -46,6 +46,7 @@ whisper-rs = { version = "0.14", optional = true }
 whisper-rs-sys = { version = "0.13", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
